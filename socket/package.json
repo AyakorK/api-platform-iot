@@ -8,10 +8,12 @@
   "dependencies": {
     "dotenv": "^8.2.0",
     "firebase-admin": "^9.5.0",
+    "mqtt": "^5.3.5",
     "serialport": "^9.2.4",
     "socket.io": "^2.4.0",
     "xbee": "^0.0.4",
-    "xbee-api": "^0.6.0"
+    "xbee-api": "^0.6.0",
+    "yarn": "^1.22.21"
   },
   "devDependencies": {
     "cross-env": "^7.0.3"

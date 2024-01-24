@@ -1,14 +1,17 @@
 var SerialPort = require('serialport');
 var xbee_api = require('xbee-api');
 var C = xbee_api.constants;
+var mqtt = require('mqtt');  // Add MQTT library
 //var storage = require("./storage")
 require('dotenv').config()
-
+const mqttClient = mqtt.connect(process.env.MQTT_URL);
 
 const SERIAL_PORT = process.env.SERIAL_PORT;
+let isLightOn = false;
+let isColorOne = false;
 
 var xbeeAPI = new xbee_api.XBeeAPI({
-  api_mode: 2
+  api_mode: 1
 });
 
 let serialport = new SerialPort(SERIAL_PORT, {
@@ -39,6 +42,15 @@ serialport.on("open", function () {
   };
   xbeeAPI.builder.write(frame_obj);
 
+  const destination64 = "FFFFFFFFFFFFFFFF";
+
+  frame_obj = { // AT Request to be sent
+    type: C.FRAME_TYPE.AT_COMMAND,
+    destination64: destination64,
+    command: "D0",
+    commandParameter: [4],
+  };
+  xbeeAPI.builder.write(frame_obj);
 });
 
 // All frames parsed by the XBee will be emitted here
@@ -66,8 +78,64 @@ xbeeAPI.parser.on("data", function (frame) {
   } else if (C.FRAME_TYPE.ZIGBEE_IO_DATA_SAMPLE_RX === frame.type) {
 
     console.log("ZIGBEE_IO_DATA_SAMPLE_RX")
-    console.log(frame.analogSamples.AD0)
+    console.log(frame.digitalSamples.DIO2)
     //storage.registerSample(frame.remote64,frame.analogSamples.AD0 )
+
+    // Define a variable to track the state of the light
+
+    console.log(frame)
+// Check if the button is pressed
+    if (frame.digitalSamples.DIO2 === 0) {
+      console.log("Button pressed");
+
+      // Toggle the state of the light
+      isLightOn = !isLightOn;
+
+      // Define the command parameter based on the light state
+      const commandParameter = isLightOn ? [4] : [5];
+      let commandToPress = isColorOne ? "D5" : "D0";
+      console.log(commandToPress)
+      if (isLightOn) {
+      } else {
+        isColorOne = !isColorOne;
+      }
+
+      // AT Request to be sent for D0
+      const frameObjD0 = {
+        type: C.FRAME_TYPE.AT_COMMAND,
+        destination64: frame.remote64,
+        command: "D0",
+        commandParameter,
+      };
+      xbeeAPI.builder.write(frameObjD0);
+
+      // AT Request to be sent for D1
+      const frameObjD1 = {
+        type: C.FRAME_TYPE.REMOTE_AT_COMMAND_REQUEST,
+        destination64: process.env.DISTANT_ZIGBEE,
+        command: commandToPress,
+        commandParameter,
+      };
+      xbeeAPI.builder.write(frameObjD1);
+
+      const mqttTopic = 'battleships/button/press';  // Replace with your MQTT topic
+      const mqttPayload = JSON.stringify({
+        buttonPressed: true,
+        isLightOn: isLightOn,
+        isColorOne: isColorOne,
+      });
+
+      mqttClient.publish(mqttTopic, mqttPayload);
+    } else {
+      console.log("Button released");
+      const mqttTopic = 'battleships/button/release';  // Replace with your MQTT topic
+      const mqttPayload = JSON.stringify({
+        buttonReleased: true,
+      });
+
+      mqttClient.publish(mqttTopic, mqttPayload);
+    }
+
 
   } else if (C.FRAME_TYPE.REMOTE_COMMAND_RESPONSE === frame.type) {
     console.log("REMOTE_COMMAND_RESPONSE")
@@ -76,5 +144,15 @@ xbeeAPI.parser.on("data", function (frame) {
     let dataReceived = String.fromCharCode.apply(null, frame.commandData)
     console.log(dataReceived);
   }
+
+  // Handle MQTT connection
+  mqttClient.on('connect', function () {
+    console.log('Connected to MQTT broker');
+  });
+
+// Handle errors
+  mqttClient.on('error', function (error) {
+    console.error('MQTT error:', error);
+  });
 
 });
