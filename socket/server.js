@@ -1,10 +1,8 @@
 var SerialPort = require('serialport');
 var xbee_api = require('xbee-api');
+var mqtt = require('mqtt');
 var C = xbee_api.constants;
-var mqtt = require('mqtt');  // Add MQTT library
-//var storage = require("./storage")
-require('dotenv').config()
-const mqttClient = mqtt.connect(process.env.MQTT_URL);
+require('dotenv').config();
 
 const SERIAL_PORT = process.env.SERIAL_PORT;
 let isLightOn = false;
@@ -18,12 +16,36 @@ let serialport = new SerialPort(SERIAL_PORT, {
   baudRate: parseInt(process.env.SERIAL_BAUDRATE) || 9600,
 }, function (err) {
   if (err) {
-    return console.log('Error: ', err.message)
+    return console.log('Error: ', err.message);
   }
 });
 
 serialport.pipe(xbeeAPI.parser);
 xbeeAPI.builder.pipe(serialport);
+
+// Create an MQTT client
+const mqttClient = mqtt.connect(process.env.MQTT_URL);
+
+// Handle MQTT connection
+mqttClient.on('connect', function () {
+  console.log('Connected to MQTT broker');
+
+  // Subscribe to the MQTT topic
+  const mqttTopic = 'battleships/button/release';  // Replace with your MQTT topic
+  mqttClient.subscribe(mqttTopic, function (err) {
+    if (err) {
+      console.error('Error subscribing to MQTT topic:', err);
+    } else {
+      console.log('Subscribed to MQTT topic:', mqttTopic);
+    }
+  });
+});
+
+// Handle incoming MQTT messages
+mqttClient.on('message', function (topic, message) {
+  console.log('Received message from topic:', topic);
+  console.log('Message:', message.toString());
+});
 
 serialport.on("open", function () {
   var frame_obj = { // AT Request to be sent
@@ -54,9 +76,6 @@ serialport.on("open", function () {
 });
 
 // All frames parsed by the XBee will be emitted here
-
-// storage.listSensors().then((sensors) => sensors.forEach((sensor) => console.log(sensor.data())))
-
 xbeeAPI.parser.on("data", function (frame) {
 
   //on new device is joined, register it
@@ -133,7 +152,11 @@ xbeeAPI.parser.on("data", function (frame) {
         buttonReleased: true,
       });
 
+      console.log(mqttPayload)
+
       mqttClient.publish(mqttTopic, mqttPayload);
+
+      console.log("MQTT Published")
     }
 
 
@@ -144,15 +167,9 @@ xbeeAPI.parser.on("data", function (frame) {
     let dataReceived = String.fromCharCode.apply(null, frame.commandData)
     console.log(dataReceived);
   }
-
-  // Handle MQTT connection
-  mqttClient.on('connect', function () {
-    console.log('Connected to MQTT broker');
-  });
+});
 
 // Handle errors
-  mqttClient.on('error', function (error) {
-    console.error('MQTT error:', error);
-  });
-
+mqttClient.on('error', function (error) {
+  console.error('MQTT error:', error);
 });
