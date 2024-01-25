@@ -5,8 +5,10 @@ var C = xbee_api.constants;
 require('dotenv').config();
 
 const SERIAL_PORT = process.env.SERIAL_PORT;
-let isLightOn = false;
-let isColorOne = false;
+let players = {};
+let buttonsActivated = {};
+let playerTurn = "0013a20041582fbb"
+
 
 var xbeeAPI = new xbee_api.XBeeAPI({
   api_mode: 1
@@ -31,7 +33,7 @@ mqttClient.on('connect', function () {
   console.log('Connected to MQTT broker');
 
   // Subscribe to the MQTT topic
-  const mqttTopic = 'battleships/button/release';  // Replace with your MQTT topic
+  const mqttTopic = 'battleships/sensor/triggered';  // Replace with your MQTT topic
   mqttClient.subscribe(mqttTopic, function (err) {
     if (err) {
       console.error('Error subscribing to MQTT topic:', err);
@@ -63,111 +65,156 @@ serialport.on("open", function () {
     commandParameter: [],
   };
   xbeeAPI.builder.write(frame_obj);
-
-  const destination64 = "FFFFFFFFFFFFFFFF";
-
-  frame_obj = { // AT Request to be sent
-    type: C.FRAME_TYPE.AT_COMMAND,
-    destination64: destination64,
-    command: "D0",
-    commandParameter: [4],
-  };
-  xbeeAPI.builder.write(frame_obj);
 });
 
-// All frames parsed by the XBee will be emitted here
 xbeeAPI.parser.on("data", function (frame) {
 
-  //on new device is joined, register it
 
-  //on packet received, dispatch event
-  //let dataReceived = String.fromCharCode.apply(null, frame.data);
-  if (C.FRAME_TYPE.ZIGBEE_RECEIVE_PACKET === frame.type) {
-    console.log("C.FRAME_TYPE.ZIGBEE_RECEIVE_PACKET");
-    let dataReceived = String.fromCharCode.apply(null, frame.data);
-    console.log(">> ZIGBEE_RECEIVE_PACKET >", dataReceived);
+  if (C.FRAME_TYPE.REMOTE_COMMAND_RESPONSE === frame.type) {
+    console.log("REMOTE_COMMAND_RESPONSE")
+    players[String.fromCharCode.apply(null, frame.commandData)] = frame.remote64;
 
-  }
-
-  if (C.FRAME_TYPE.NODE_IDENTIFICATION === frame.type) {
-    // let dataReceived = String.fromCharCode.apply(null, frame.nodeIdentifier);
-    console.log("NODE_IDENTIFICATION");
-    //storage.registerSensor(frame.remote64)
-
-  } else if (C.FRAME_TYPE.ZIGBEE_IO_DATA_SAMPLE_RX === frame.type) {
-
-    console.log("ZIGBEE_IO_DATA_SAMPLE_RX")
-    console.log(frame.digitalSamples.DIO2)
-    //storage.registerSample(frame.remote64,frame.analogSamples.AD0 )
-
-    // Define a variable to track the state of the light
-
-    console.log(frame)
-// Check if the button is pressed
-    if (frame.digitalSamples.DIO2 === 0) {
-      console.log("Button pressed");
-
-      // Toggle the state of the light
-      isLightOn = !isLightOn;
-
-      // Define the command parameter based on the light state
-      const commandParameter = isLightOn ? [4] : [5];
-      let commandToPress = isColorOne ? "D5" : "D0";
-      console.log(commandToPress)
-      if (isLightOn) {
-      } else {
-        isColorOne = !isColorOne;
-      }
-
-      // AT Request to be sent for D0
-      const frameObjD0 = {
-        type: C.FRAME_TYPE.AT_COMMAND,
-        destination64: frame.remote64,
-        command: "D0",
-        commandParameter,
-      };
-      xbeeAPI.builder.write(frameObjD0);
-
-      // AT Request to be sent for D1
-      const frameObjD1 = {
-        type: C.FRAME_TYPE.REMOTE_AT_COMMAND_REQUEST,
-        destination64: process.env.DISTANT_ZIGBEE,
-        command: commandToPress,
-        commandParameter,
-      };
-      xbeeAPI.builder.write(frameObjD1);
-
-      const mqttTopic = 'battleships/button/press';  // Replace with your MQTT topic
-      const mqttPayload = JSON.stringify({
-        buttonPressed: true,
-        isLightOn: isLightOn,
-        isColorOne: isColorOne,
-      });
-
-      mqttClient.publish(mqttTopic, mqttPayload);
-    } else {
-      console.log("Button released");
-      const mqttTopic = 'battleships/button/release';  // Replace with your MQTT topic
-      const mqttPayload = JSON.stringify({
-        buttonReleased: true,
-      });
-
-      console.log(mqttPayload)
-
-      mqttClient.publish(mqttTopic, mqttPayload);
-
-      console.log("MQTT Published")
+    if (Object.keys(players).length > 1) {
+      // console.log("Players: ", players);
+      // Send MQTT message
+      const mqttTopic = 'battleships/players';  // Replace with your MQTT topic
+      mqttClient.publish(mqttTopic, JSON.stringify(players));
     }
 
+  } else if (C.FRAME_TYPE.ZIGBEE_RECEIVE_PACKET === frame.type) {
 
-  } else if (C.FRAME_TYPE.REMOTE_COMMAND_RESPONSE === frame.type) {
-    console.log("REMOTE_COMMAND_RESPONSE")
+    // if (playerTurn !== frame.remote64) {
+    //   return
+    // }
+    // console.log("C.FRAME_TYPE.ZIGBEE_RECEIVE_PACKET");
+    // console.log(frame)
+    let dataReceived = String.fromCharCode.apply(null, frame.data);
+    // console.log(dataReceived)
+    let data = dataReceived.split("\r\n");
+
+    // Now create a dictionnary : ex: sensor 3 : 9 becomes "sensor3":9
+    let dictionnary = {};
+    // Identify the dictionnary by the player
+    dictionnary["player"] = frame.remote64;
+    for (let i = 0; i < data.length; i++) {
+      let line = data[i].trim().split(":");
+      // Get rid of every spaces
+      if (line.length === 2) {
+        dictionnary[line[0].trim()] = line[1].trim();
+      }
+    }
+    // console.log(dictionnary);
+    // console.log("-----------------")
+
+    // console.log("PLAYERS: ", players);
+    checkSensors(dictionnary, frame);
+    checkButtons(dictionnary, frame);
   } else {
-    console.debug(frame);
-    let dataReceived = String.fromCharCode.apply(null, frame.commandData)
-    console.log(dataReceived);
+    // console.log("FRAME_TYPE:", frame.type)
   }
 });
+
+function checkSensors(dictionnary, request) {
+  // If any sensor is triggered (>250), send a MQTT message
+  // Take all the keys that contain "sensor"
+  let sensors = Object.keys(dictionnary).filter(key => key.includes("ensor"));
+
+  let sensorsActivated = sensors.filter(sensor => dictionnary[sensor] > 250);
+  if (sensorsActivated.length === 1) {
+    const mqttTopic = 'battleships/sensor/triggered';  // Replace with your MQTT topic
+    const playerIdentity = Object.keys(players).find(key => players[key] !== dictionnary["player"]);
+    mqttClient.publish(mqttTopic, `Case ${JSON.stringify(sensorsActivated[0])} of ${playerIdentity} has been targeted`);
+
+    const playerToDisable = players[playerIdentity]
+
+    disableLight(playerToDisable, sensorsActivated[0], request)
+  } else if (sensorsActivated.length > 1) {
+    console.log("Error: ", sensorsActivated.length, " sensors activated");
+  }
+}
+
+function checkButtons(dictionnary, request) {
+  // If any button is pressed, send a MQTT message
+  let buttons = Object.keys(dictionnary).filter(key => key.includes("button"));
+
+  let buttonsActivated = buttons.filter(button => dictionnary[button] === "1");
+
+  if (buttonsActivated.length === 1) {
+    activateLight(dictionnary["player"], buttonsActivated[0], request);
+    console.log(playerTurn)
+    playerTurn = "0013a20041582fbb"
+    console.log(playerTurn)
+  } else if (buttonsActivated.length > 2) {
+    console.log("Error: ", buttonsActivated.length, " buttons activated");
+  }
+}
+
+function activateLight(player, button, request) {
+
+  if (request.remote64 !== player) {
+    console.log("Wrong player")
+    return
+  }
+
+  const destination64 = player
+
+  if (buttonsActivated[player] && buttonsActivated[player].length > 1) {
+    console.log("Too many buttons activated")
+    return
+  }
+
+  if (buttonsActivated[player]) {
+    if (buttonsActivated[player].includes(button)) {
+      console.log("Button already activated")
+      return
+    }
+    buttonsActivated[player].push(button)
+  } else {
+    buttonsActivated[player] = [button]
+  }
+
+  let lightNumber = button.split(" ")[1]
+  lightNumber = parseInt(lightNumber) + 1
+  const frame_obj = { // AT Request to be sent
+    type: 0x10,
+    destination64: destination64,
+    data: `${lightNumber}:HIGH\n`,
+  };
+  xbeeAPI.builder.write(frame_obj);
+
+  const mqttTopic = 'battleships/button/pressed';  // Replace with your MQTT topic
+  // Identify player (player 1 or 2)
+  const playerIdentity = Object.keys(players).find(key => players[key] === player);
+  mqttClient.publish(mqttTopic, `Button ${JSON.stringify(buttonsActivated[0])} of ${playerIdentity} has been activated`);
+
+  console.log("Buttons activated: ", buttonsActivated)
+}
+
+function disableLight(player, sensor, request) {
+
+
+    if (request.remote64 === player) {
+      console.log("Wrong player")
+      return
+    }
+
+    const destination64 = player
+
+    console.log("Disable light: ", sensor)
+
+    console.log(player)
+
+
+    let lightNumber = sensor.split(" ")[1]
+    lightNumber = parseInt(lightNumber) + 1
+    console.log(lightNumber)
+    const frame_obj = { // AT Request to be sent
+      type: 0x10,
+      destination64: destination64,
+      data: `${lightNumber}:LOW\n`,
+    };
+    xbeeAPI.builder.write(frame_obj);
+}
 
 // Handle errors
 mqttClient.on('error', function (error) {
