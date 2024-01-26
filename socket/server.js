@@ -8,6 +8,7 @@ const SERIAL_PORT = process.env.SERIAL_PORT;
 let players = {};
 let buttonsActivated = {};
 let playerTurn = null;
+let canPlay = false;
 
 
 var xbeeAPI = new xbee_api.XBeeAPI({
@@ -96,12 +97,18 @@ xbeeAPI.parser.on("data", function (frame) {
       // console.log("Players: ", players);
       // Send MQTT message
       const mqttTopic = 'battleships/players';  // Replace with your MQTT topic
-      mqttClient.publish(mqttTopic, JSON.stringify(players));
+      // Create a dictionnary with the players to send : "Player 1": "0013A20040B3C7C1"
+      const dictToSend = {};
+      let i = 1;
+      Object.keys(players).forEach(key => {
+        dictToSend[`Player ${i}`] = players[key];
+        i++;
+      });
+      mqttClient.publish(mqttTopic, JSON.stringify(dictToSend));
     } else {
       const mqttTopic = 'battleships/waiting_players';  // Replace with your MQTT topic
-      mqttClient.publish(mqttTopic, JSON.stringify(players));
+      mqttClient.publish(mqttTopic, "Currently not enough players to start the game");
     }
-
   } else if (C.FRAME_TYPE.ZIGBEE_RECEIVE_PACKET === frame.type) {
 
     if (Object.keys(players).length < 2) {
@@ -110,11 +117,14 @@ xbeeAPI.parser.on("data", function (frame) {
       return
     }
 
-    // if (playerTurn !== frame.remote64) {
-    //   return
-    // }
-    // console.log("C.FRAME_TYPE.ZIGBEE_RECEIVE_PACKET");
-    // console.log(frame)
+    if (playerTurn === null) {
+      resetGame(players);
+    }
+
+    if (playerTurn !== frame.remote64) {
+      return
+    }
+
     let dataReceived = String.fromCharCode.apply(null, frame.data);
     // console.log(dataReceived)
     let data = dataReceived.split("\r\n");
@@ -178,6 +188,8 @@ function activateLight(player, button, request) {
 
   if (request.remote64 !== player) {
     console.log("Wrong player")
+    const mqttTopic = 'battleships/player/wrong';  // Replace with your MQTT topic
+    mqttClient.publish(mqttTopic, `It's not your turn ${player}`);
     return
   }
 
@@ -210,7 +222,7 @@ function activateLight(player, button, request) {
   const mqttTopic = 'battleships/button/pressed';  // Replace with your MQTT topic
   // Identify player (player 1 or 2)
   const playerIdentity = Object.keys(players).find(key => players[key] === player);
-  mqttClient.publish(mqttTopic, `Button ${JSON.stringify(buttonsActivated[0])} of ${playerIdentity} has been activated`);
+  mqttClient.publish(mqttTopic, `${playerIdentity} has activated a button`);
 
   console.log("Buttons activated: ", buttonsActivated)
 }
@@ -224,7 +236,7 @@ function resetGame(players) {
   // Reset the lights to LOW for every players
   for (let player in players) {
     const destination64 = players[player]
-    for (let i = 0; i < 4; i++) {
+    for (let i = 1; i < 5; i++) {
       const frame_obj = { // AT Request to be sent
         type: 0x10,
         destination64: destination64,
@@ -239,8 +251,8 @@ function resetGame(players) {
 
   mqttTopic = 'battleships/game/turn';  // Replace with your MQTT topic
   // Identify player (player 1 or 2)
-  const playerIdentity = Object.keys(players).find(key => players[key] === player);
-  mqttClient.publish(mqttTopic, `Player ${playerIdentity} turn`);
+  const playerIdentity = Object.keys(players).find(key => players[key] === playerTurn);
+  mqttClient.publish(mqttTopic, `${playerIdentity}'s turn`);
 }
 
 function changeTurn(player) {
@@ -252,17 +264,24 @@ function changeTurn(player) {
 
   const mqttTopic = 'battleships/game/turn';  // Replace with your MQTT topic
   // Identify player (player 1 or 2)
-  const playerIdentity = Object.keys(players).find(key => players[key] === player);
-  mqttClient.publish(mqttTopic, `Player ${playerIdentity} turn`);
+  const nextPlayerIdentity = Object.keys(players).find(key => players[key] !== player);
+  mqttClient.publish(mqttTopic, `${nextPlayerIdentity}'s turn`);
 }
 
 function disableLight(player, sensor, request) {
 
+  if (!checkEnoughLights()) {
+    console.log("Not enough lights")
+    return
+  }
 
-    if (request.remote64 === player) {
-      console.log("Wrong player")
-      return
-    }
+
+  if (request.remote64 === player) {
+    console.log("Wrong player")
+    const mqttTopic = 'battleships/player/wrong';  // Replace with your MQTT topic
+    mqttClient.publish(mqttTopic, `It's not your turn ${request.remote64}`);
+    return
+  }
 
     const destination64 = player
 
@@ -278,12 +297,23 @@ function disableLight(player, sensor, request) {
 
     // Get the buttons activated by the player
     const buttons = buttonsActivated[player]
-    // Chec kfi the sensor split[":"] is in the buttons array
-    const button = buttons.find(button => button.split(":")[1] === sensor.split(":")[1])
+
+    console.log("Buttons Selected 1: ", buttons)
+
+
+    if (!buttons) {
+      console.log("No buttons activated")
+      return
+    }
+
+    // Check if the sensor split[":"] is in the buttons array
+    const button = buttons.find(button => button.split('" "')[1] === sensor.split('" "')[1])
+
+    console.log("Button Selected 2: ", button)
 
     if (button) {
       // Remove the button from the array
-      buttonsActivated[player] = buttons.filter(button => button.split(":")[1] !== sensor.split(":")[1])
+      buttonsActivated[player] = buttons.filter(button => button.split(" ")[1] !== sensor.split(" ")[1])
 
       mqttClient.publish('battleships/sensor/destroyed', `Case ${JSON.stringify(sensor)} of ${player} has been destroyed`);
 
@@ -296,7 +326,9 @@ function disableLight(player, sensor, request) {
 }
 
 function checkLose(player) {
-  if (buttonsActivated[player].length === 0) {
+  console.log(buttonsActivated)
+
+  if (buttonsActivated && buttonsActivated[player].length === 0) {
     mqttClient.publish('battleships/player/lose', `Player ${player} has lost`);
   }
 
@@ -304,12 +336,12 @@ function checkLose(player) {
 }
 
 function checkWin() {
-  // For each player, check if all the buttons of every player except one are destroyed
   const playersArray = Object.values(players)
+
   for (let i = 0; i < playersArray.length; i++) {
     const player = playersArray[i]
     const buttons = buttonsActivated[player]
-    if (buttons.length === 0) {
+    if (buttons === undefined || buttons.length === 0) {
       // Player has lost
       playersArray.splice(i, 1)
       i--
@@ -317,8 +349,35 @@ function checkWin() {
   }
 
   if (playersArray.length === 1) {
+    console.log("Player won: ", playersArray[0])
     mqttClient.publish('battleships/player/win', `Player ${playersArray[0]} has won`);
+  } else if (playersArray.length === 0) {
+    console.log("No player has won")
+    mqttClient.publish('battleships/player/win', `No player has won`);
+  } else {
+    // Continue the game
+    console.log("Continue the game")
   }
+}
+
+function checkEnoughLights() {
+  // For all the players look in buttonsActivated that there is at least two buttons activated
+  if (!canPlay) {
+    for (let player in players) {
+      const buttons = buttonsActivated[player]
+      console.log(buttons)
+      if (buttons === undefined || buttons.length < 2) {
+        console.log("Not enough lights activated")
+        const mqttTopic = 'battleships/game/not_enough_buttons';  // Replace with your MQTT topic
+        console.log(`Not enough lights activated for ${player}`)
+        mqttClient.publish(mqttTopic, `Not enough lights activated for ${player}`);
+        canPlay = true
+        return false
+      }
+    }
+  }
+
+  return true
 }
 
 // Handle errors
