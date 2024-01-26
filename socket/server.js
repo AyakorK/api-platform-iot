@@ -91,7 +91,13 @@ xbeeAPI.parser.on("data", function (frame) {
 
   if (C.FRAME_TYPE.REMOTE_COMMAND_RESPONSE === frame.type) {
     console.log("REMOTE_COMMAND_RESPONSE")
-    players[String.fromCharCode.apply(null, frame.commandData)] = frame.remote64;
+    if (frame.remote64 === process.env.DISTANT_ZIGBEE_ILAN) {
+      players["Ilan"] = frame.remote64;
+    } else if (frame.remote64 === process.env.DISTANT_ZIGBEE_LUCAS) {
+      players["Lucas"] = frame.remote64;
+    } else {
+      players[String.fromCharCode.apply(null, frame.commandData)] = frame.remote64;
+    }
 
     if (Object.keys(players).length > 1) {
       // console.log("Players: ", players);
@@ -164,6 +170,11 @@ function checkSensors(dictionnary, request) {
 
     const playerToDisable = players[playerIdentity]
 
+    if (!checkEnoughLights()) {
+      console.log("Not enough lights")
+      return
+    }
+
     disableLight(playerToDisable, sensorsActivated[0], request)
   } else if (sensorsActivated.length > 1) {
     console.log("Error: ", sensorsActivated.length, " sensors activated");
@@ -222,7 +233,7 @@ function activateLight(player, button, request) {
   const mqttTopic = 'battleships/button/pressed';  // Replace with your MQTT topic
   // Identify player (player 1 or 2)
   const playerIdentity = Object.keys(players).find(key => players[key] === player);
-  mqttClient.publish(mqttTopic, `${playerIdentity} has activated a button`);
+  mqttClient.publish(mqttTopic, `${playerIdentity} has activated a light`);
 
   console.log("Buttons activated: ", buttonsActivated)
 }
@@ -230,6 +241,23 @@ function activateLight(player, button, request) {
 function resetGame(players) {
   let mqttTopic = 'battleships/game/start';  // Replace with your MQTT topic
   mqttClient.publish(mqttTopic, `New game starts`);
+
+  if (Object.keys(players).length > 1) {
+    // console.log("Players: ", players);
+    // Send MQTT message
+    const mqttTopic = 'battleships/players';  // Replace with your MQTT topic
+    // Create a dictionnary with the players to send : "Player 1": "0013A20040B3C7C1"
+    const dictToSend = {};
+    let i = 1;
+    Object.keys(players).forEach(key => {
+      dictToSend[`Player ${i}`] = key;
+      i++;
+    });
+    mqttClient.publish(mqttTopic, JSON.stringify(dictToSend));
+  } else {
+    const mqttTopic = 'battleships/waiting_players';  // Replace with your MQTT topic
+    mqttClient.publish(mqttTopic, "Currently not enough players to start the game");
+  }
 
   buttonsActivated = {}
 
@@ -269,6 +297,7 @@ function changeTurn(player) {
 }
 
 function disableLight(player, sensor, request) {
+  console.log("Disable light: ", player, sensor)
 
   if (!checkEnoughLights()) {
     console.log("Not enough lights")
@@ -306,20 +335,38 @@ function disableLight(player, sensor, request) {
       return
     }
 
-    // Check if the sensor split[":"] is in the buttons array
-    const button = buttons.find(button => button.split('" "')[1] === sensor.split('" "')[1])
+    const button = buttons.find(button => button.split(" ")[1] === sensor.split(" ")[1])
 
-    console.log("Button Selected 2: ", button)
-
-    if (button) {
+    if (button !== undefined) {
       // Remove the button from the array
       buttonsActivated[player] = buttons.filter(button => button.split(" ")[1] !== sensor.split(" ")[1])
 
-      mqttClient.publish('battleships/sensor/destroyed', `Case ${JSON.stringify(sensor)} of ${player} has been destroyed`);
+      const playerIdentity = Object.keys(players).find(key => players[key] === player);
+
+      const sensorNumber = sensor.split(" ")[1]
+
+      console.log("Buttons Selected 3: ", buttonsActivated[player])
+
+      const otherPlayerIdentity = Object.keys(players).find(key => players[key] !== player);
+
+      const sentences = [`The ship of ${playerIdentity} is drowning !`, `Good shot ${otherPlayerIdentity} you just nailed it !`, `${otherPlayerIdentity} touched ${playerIdentity}`, `What a shot from ${otherPlayerIdentity} !`, `You just destroyed ${playerIdentity}`]
+      const sentence = sentences[Math.floor(Math.random() * sentences.length)];
+      mqttClient.publish('battleships/sensor/destroyed', sentence);
 
       checkLose(player)
     } else {
-      mqttClient.publish('battleships/sensor/missed', `Case ${JSON.stringify(sensor)} of ${player} was empty`);
+
+      console.log ("Missed")
+
+      const sensorNumber = sensor.split(" ")[1]
+
+      const playerIdentity = Object.keys(players).find(key => players[key] === player);
+
+      const otherPlayerIdentity = Object.keys(players).find(key => players[key] !== player);
+
+      const sentences = [`Case ${sensorNumber} of ${playerIdentity} was empty`, `You need to aim a ship ${otherPlayerIdentity} not the water`, `${otherPlayerIdentity} missed ${playerIdentity}`, `Damn it ${otherPlayerIdentity} you missed ${playerIdentity}`, `That was such a bad shot ${otherPlayerIdentity}`]
+      const sentence = sentences[Math.floor(Math.random() * sentences.length)];
+      mqttClient.publish('battleships/sensor/missed', sentence);
     }
 
     changeTurn(request.remote64)
@@ -329,7 +376,7 @@ function checkLose(player) {
   console.log(buttonsActivated)
 
   if (buttonsActivated && buttonsActivated[player].length === 0) {
-    mqttClient.publish('battleships/player/lose', `Player ${player} has lost`);
+    mqttClient.publish('battleships/player/elimination', `Player ${player} has lost`);
   }
 
   checkWin()
@@ -365,14 +412,15 @@ function checkEnoughLights() {
   if (!canPlay) {
     for (let player in players) {
       const buttons = buttonsActivated[player]
-      console.log(buttons)
+      console.log(buttonsActivated[player])
       if (buttons === undefined || buttons.length < 2) {
         console.log("Not enough lights activated")
-        const mqttTopic = 'battleships/game/not_enough_buttons';  // Replace with your MQTT topic
+        const mqttTopic = 'battleships/game/not_enough_lights';  // Replace with your MQTT topic
         console.log(`Not enough lights activated for ${player}`)
         mqttClient.publish(mqttTopic, `Not enough lights activated for ${player}`);
-        canPlay = true
         return false
+      } else {
+        canPlay = true
       }
     }
   }
