@@ -189,7 +189,6 @@ function checkButtons(dictionnary, request) {
 
   if (buttonsActivated.length === 1) {
     activateLight(dictionnary["player"], buttonsActivated[0], request);
-    changeTurn(dictionnary["player"]);
   } else if (buttonsActivated.length > 2) {
     console.log("Error: ", buttonsActivated.length, " buttons activated");
   }
@@ -208,18 +207,24 @@ function activateLight(player, button, request) {
 
   if (buttonsActivated[player] && buttonsActivated[player].length > 1) {
     console.log("Too many buttons activated")
+    const mqttTopic = 'battleships/button/too_many_activated';  // Replace with your MQTT topic
+    mqttClient.publish(mqttTopic, `Too many buttons activated ${player}`);
     return
   }
 
   if (buttonsActivated[player]) {
     if (buttonsActivated[player].includes(button)) {
       console.log("Button already activated")
+      const mqttTopic = 'battleships/button/already_activated';  // Replace with your MQTT topic
+      mqttClient.publish(mqttTopic, `Button already activated ${player}`);
       return
     }
     buttonsActivated[player].push(button)
   } else {
     buttonsActivated[player] = [button]
   }
+
+  changeTurn(player);
 
   let lightNumber = button.split(" ")[1]
   lightNumber = parseInt(lightNumber) + 1
@@ -411,8 +416,7 @@ function checkEnoughLights() {
   // For all the players look in buttonsActivated that there is at least two buttons activated
   if (!canPlay) {
     for (let player in players) {
-      const buttons = buttonsActivated[player]
-      console.log(buttonsActivated[player])
+      const buttons = buttonsActivated[players[player]]
       if (buttons === undefined || buttons.length < 2) {
         console.log("Not enough lights activated")
         const mqttTopic = 'battleships/game/not_enough_lights';  // Replace with your MQTT topic
