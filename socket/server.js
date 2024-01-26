@@ -208,7 +208,8 @@ function activateLight(player, button, request) {
   if (buttonsActivated[player] && buttonsActivated[player].length > 1) {
     console.log("Too many buttons activated")
     const mqttTopic = 'battleships/button/too_many_activated';  // Replace with your MQTT topic
-    mqttClient.publish(mqttTopic, `Too many buttons activated ${player}`);
+    const playerIdentity = Object.keys(players).find(key => players[key] === player);
+    mqttClient.publish(mqttTopic, `Too many buttons activated ${playerIdentity}`);
     return
   }
 
@@ -216,7 +217,8 @@ function activateLight(player, button, request) {
     if (buttonsActivated[player].includes(button)) {
       console.log("Button already activated")
       const mqttTopic = 'battleships/button/already_activated';  // Replace with your MQTT topic
-      mqttClient.publish(mqttTopic, `Button already activated ${player}`);
+      const playerIdentity = Object.keys(players).find(key => players[key] === player);
+      mqttClient.publish(mqttTopic, `Button already activated ${playerIdentity}`);
       return
     }
     buttonsActivated[player].push(button)
