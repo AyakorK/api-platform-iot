@@ -94,7 +94,7 @@ xbeeAPI.parser.on("data", function (frame) {
     if (frame.remote64 === process.env.DISTANT_ZIGBEE_ILAN) {
       players["Ilan"] = frame.remote64;
     } else if (frame.remote64 === process.env.DISTANT_ZIGBEE_LUCAS) {
-      players["Lucas"] = frame.remote64;
+      players["Guest"] = frame.remote64;
     } else {
       players[String.fromCharCode.apply(null, frame.commandData)] = frame.remote64;
     }
@@ -404,7 +404,8 @@ function checkWin() {
 
   if (playersArray.length === 1) {
     console.log("Player won: ", playersArray[0])
-    mqttClient.publish('battleships/player/win', `Player ${playersArray[0]} has won`);
+    const playerIdentity = Object.keys(players).find(key => players[key] === playersArray[0]);
+    mqttClient.publish('battleships/player/win', `Player ${playerIdentity} has won`);
   } else if (playersArray.length === 0) {
     console.log("No player has won")
     mqttClient.publish('battleships/player/win', `No player has won`);
